@@ -29,7 +29,7 @@ class Walmart:
             task_id,
             status_signal,
             image_signal,
-            product,
+            product,    # url from site
             profile,
             float(monitor_delay),
             float(error_delay),

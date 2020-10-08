@@ -43,7 +43,7 @@ class BestBuy:
             float(monitor_delay),
             float(error_delay),
         )
-        self.sku_id = self.product.split("=")[1]
+        self.sku_id = self.product.split("=")[1]    # not in walmart.py
         self.session = requests.Session()
         if proxy != False:
             self.session.proxies.update(proxy)
@@ -113,6 +113,41 @@ class BestBuy:
             if success:
                 break
 
+    def check_stock(self):
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
+        }
+        while True:
+            try:
+                url = "https://www.bestbuy.com/api/tcfb/model.json?paths=%5B%5B%22shop%22%2C%22scds%22%2C%22v2%22%2C%22page%22%2C%22tenants%22%2C%22bbypres%22%2C%22pages%22%2C%22globalnavigationv5sv%22%2C%22header%22%5D%2C%5B%22shop%22%2C%22buttonstate%22%2C%22v5%22%2C%22item%22%2C%22skus%22%2C{}%2C%22conditions%22%2C%22NONE%22%2C%22destinationZipCode%22%2C%22%2520%22%2C%22storeId%22%2C%22%2520%22%2C%22context%22%2C%22cyp%22%2C%22addAll%22%2C%22false%22%5D%5D&method=get".format(
+                    self.sku_id
+                )
+                r = requests.get(url, headers=headers, verify=False)    # verify=False says Requests can ignore verifying the SSL certificate
+                if "ADD_TO_CART" in r.text:
+                    # self.send_slack_msg() # this was in here originally but removing as we're not sending Slack messages
+                    send_webhook(
+                            "OP",
+                            "Bestbuy",
+                            self.profile["profile_name"],
+                            task_id,
+                            product_image,
+                        )
+                    return "ADD_TO_CART" in r.text
+                time.sleep(self.monitor_delay)
+            except Exception as e:
+                self.status_signal.emit(
+                    {
+                        "msg": "Error Checking Stock (line {} {} {})".format(
+                            sys.exc_info()[-1].tb_lineno, type(e).__name__, e
+                        ),
+                        "status": "error",
+                    }
+                )
+                time.sleep(self.error_delay)
+                
     def set_cookies_using_browser(self):
         self.status_signal.emit(
             {"msg": "Getting Cookies from Selenium", "status": "normal"}
@@ -168,11 +203,11 @@ class BestBuy:
             if driver is not None:
                 driver.quit()
 
-    def send_slack_msg(self):
-        slack_url = "https://hooks.slack.com/"
-        data = {"text": f"From Bot: Card available at {self.product} "}
-        requests.post(slack_url, json=data)
-        return
+    # def send_slack_msg(self):
+    #     slack_url = "https://hooks.slack.com/"
+    #     data = {"text": f"From Bot: Card available at {self.product} "}
+    #     requests.post(slack_url, json=data)
+    #     return
 
     def get_tas_data(self):
         headers = {
@@ -235,34 +270,6 @@ class BestBuy:
                 self.status_signal.emit(
                     {
                         "msg": "Error Loading Product Page (line {} {} {})".format(
-                            sys.exc_info()[-1].tb_lineno, type(e).__name__, e
-                        ),
-                        "status": "error",
-                    }
-                )
-                time.sleep(self.error_delay)
-
-    def check_stock(self):
-        headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
-        }
-        while True:
-            try:
-                url = "https://www.bestbuy.com/api/tcfb/model.json?paths=%5B%5B%22shop%22%2C%22scds%22%2C%22v2%22%2C%22page%22%2C%22tenants%22%2C%22bbypres%22%2C%22pages%22%2C%22globalnavigationv5sv%22%2C%22header%22%5D%2C%5B%22shop%22%2C%22buttonstate%22%2C%22v5%22%2C%22item%22%2C%22skus%22%2C{}%2C%22conditions%22%2C%22NONE%22%2C%22destinationZipCode%22%2C%22%2520%22%2C%22storeId%22%2C%22%2520%22%2C%22context%22%2C%22cyp%22%2C%22addAll%22%2C%22false%22%5D%5D&method=get".format(
-                    self.sku_id
-                )
-                r = requests.get(url, headers=headers, verify=False)
-                if "ADD_TO_CART" in r.text:
-                    self.send_slack_msg()
-                    return "ADD_TO_CART" in r.text
-                time.sleep(self.monitor_delay)
-            except Exception as e:
-                self.status_signal.emit(
-                    {
-                        "msg": "Error Checking Stock (line {} {} {})".format(
                             sys.exc_info()[-1].tb_lineno, type(e).__name__, e
                         ),
                         "status": "error",
