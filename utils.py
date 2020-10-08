@@ -1,32 +1,27 @@
-# PyCryptodome is a self-contained Python package of low-level cryptographic primitives
 try:
     from Crypto import Random
     from Crypto.Cipher import AES
 except:
     from Cryptodome import Random
     from Cryptodome.Cipher import AES
-
-# Makes ANSI escape character sequences (for producing colored terminal text and cursor positioning) work under MS Windows
 from colorama import init, Fore, Back, Style
 from datetime import datetime
-from selenium.webdriver import Chrome, ChromeOptions
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-from chromedriver_py import binary_path as driver_path
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options
+from selenium.common import exceptions
 from webhook import DiscordWebhook, DiscordEmbed
-
 import json, platform, darkdetect, random, settings, threading, hashlib, base64
 
-e_key = "YnJ1aG1vbWVudA==".encode()  # encryption key. Huge security hole
-BLOCK_SIZE = 16  # used for encryption
 normal_color = Fore.CYAN
-
+e_key = "YnJ1aG1vbWVudA==".encode()
+BLOCK_SIZE = 16
 if platform.system() == "Windows":
     init(convert=True)
 else:
     init()
 print(normal_color + "Welcome To Bird Bot")
 
-# logs to console
+
 class BirdLogger:
     def ts(self):
         return str(datetime.now())[:-7]
@@ -133,6 +128,8 @@ def send_webhook(webhook_type, site, profile, task_id, image_url):
             if not settings.webhook_on_failed:
                 return
             embed = DiscordEmbed(title="Payment Failed", color=0xFC5151)
+        else:
+            embed = DiscordEmbed(title=webhook_type, color=0xFC5151)
         embed.set_footer(
             text="Via Bird Bot", icon_url="https://i.imgur.com/fy26LbM.png"
         )
@@ -152,32 +149,17 @@ def open_browser(link, cookies):
 
 
 def start_browser(link, cookies):
-    caps = DesiredCapabilities().CHROME
-    caps["pageLoadStrategy"] = "eager"
-    chrome_options = ChromeOptions()
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option("useAutomationExtension", False)
-    driver = Chrome(
-        desired_capabilities=caps, executable_path=driver_path, options=chrome_options
+    options = Options()
+    options.headless = False
+    options.log.level = "trace"
+    firefox_profile = webdriver.FirefoxProfile()
+    firefox_profile.accept_untrusted_certs = True
+    driver = webdriver.Firefox(
+        options=options,
+        firefox_profile=firefox_profile,
+        service_log_path="/dev/null",
     )
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument",
-        {
-            "source": """
-        Object.defineProperty(window, 'navigator', {
-            value: new Proxy(navigator, {
-              has: (target, key) => (key === 'webdriver' ? false : key in target),
-              get: (target, key) =>
-                key === 'webdriver'
-                  ? undefined
-                  : typeof target[key] === 'function'
-                  ? target[key].bind(target)
-                  : target[key]
-            })
-        })
-                  """
-        },
-    )
+
     driver.get(link)
     for cookie in cookies:
         driver.add_cookie(

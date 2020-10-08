@@ -8,6 +8,13 @@ from base64 import b64encode
 from utils import send_webhook
 import requests, time, lxml.html, json, sys, settings
 
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options
+from selenium.common import exceptions
+
 
 class BestBuy:
     def __init__(
@@ -36,72 +43,144 @@ class BestBuy:
             float(monitor_delay),
             float(error_delay),
         )
+        self.sku_id = self.product.split("=")[1]
         self.session = requests.Session()
         if proxy != False:
             self.session.proxies.update(proxy)
         self.status_signal.emit({"msg": "Starting", "status": "normal"})
-        tas_data = self.get_tas_data()
-        product_image = self.monitor()
-        self.atc()
-        self.start_checkout()
-        self.submit_shipping()
-        self.submit_payment(tas_data)
+
         while True:
-            success, jwt = self.submit_order()
-            if not success and jwt != None:
-                transaction_id = self.handle_3dsecure(jwt)
-                self.submit_card(transaction_id)
-            else:
-                if success:
-                    send_webhook(
-                        "OP",
-                        "Bestbuy",
-                        self.profile["profile_name"],
-                        task_id,
-                        product_image,
-                    )
+            self.status_signal.emit({"msg": "Checking Stock", "status": "normal"})
+            self.check_stock()
+            tas_data = self.get_tas_data()
+            # Get cookies using the browser
+            self.set_cookies_using_browser()
+            product_image = self.monitor()
+            if not self.atc():
+                continue
+            self.start_checkout()
+            self.submit_shipping()
+            self.submit_payment(tas_data)
+            self.refresh_payment()
+
+            while True:
+                success, jwt = self.submit_order()
+                if not success and jwt != None:
+                    transaction_id = self.handle_3dsecure(jwt)
+                    self.submit_card(transaction_id)
                 else:
-                    if settings.browser_on_failed:
-                        self.status_signal.emit(
-                            {
-                                "msg": "Browser Ready",
-                                "status": "alt",
-                                "url": "https://www.bestbuy.com/checkout/r/fulfillment",
-                                "cookies": [
-                                    {
-                                        "name": cookie.name,
-                                        "value": cookie.value,
-                                        "domain": cookie.domain,
-                                    }
-                                    for cookie in self.session.cookies
-                                ],
-                            }
-                        )
+                    if success:
                         send_webhook(
-                            "B",
+                            "OP",
                             "Bestbuy",
                             self.profile["profile_name"],
                             task_id,
                             product_image,
                         )
                     else:
-                        send_webhook(
-                            "PF",
-                            "Bestbuy",
-                            self.profile["profile_name"],
-                            task_id,
-                            product_image,
-                        )
+                        if settings.browser_on_failed:
+                            self.status_signal.emit(
+                                {
+                                    "msg": "Browser Ready",
+                                    "status": "alt",
+                                    "url": "https://www.bestbuy.com/checkout/r/fulfillment",
+                                    "cookies": [
+                                        {
+                                            "name": cookie.name,
+                                            "value": cookie.value,
+                                            "domain": cookie.domain,
+                                        }
+                                        for cookie in self.session.cookies
+                                    ],
+                                }
+                            )
+                            send_webhook(
+                                "B",
+                                "Bestbuy",
+                                self.profile["profile_name"],
+                                task_id,
+                                product_image,
+                            )
+                        else:
+                            send_webhook(
+                                "PF",
+                                "Bestbuy",
+                                self.profile["profile_name"],
+                                task_id,
+                                product_image,
+                            )
+                    break
+            if success:
                 break
+
+    def set_cookies_using_browser(self):
+        self.status_signal.emit(
+            {"msg": "Getting Cookies from Selenium", "status": "normal"}
+        )
+        cookies = self.get_cookies_using_browser()
+        if cookies is not None:
+            for cookie in cookies:
+                self.session.cookies.set(
+                    name=cookie["name"], value=cookie["value"], domain=cookie["domain"]
+                )
+            self.session.cookies.set(
+                name="G_ENABLED_IDPS", value="google", domain="www.bestbuy.com"
+            )
+            self.status_signal.emit(
+                {"msg": "Got Cookies from Selenium", "status": "normal"}
+            )
+
+    def get_cookies_using_browser(self):
+        # setting options for headless, profile to
+        # ignore certs, firefox driver & timeout
+        options = Options()
+        options.headless = True
+        options.log.level = "trace"
+        firefox_profile = webdriver.FirefoxProfile()
+        firefox_profile.accept_untrusted_certs = True
+        driver = None
+        try:
+            driver = webdriver.Firefox(
+                options=options,
+                firefox_profile=firefox_profile,
+                service_log_path="/dev/null",
+            )
+
+            driver.get(self.product)
+            driver.get("https://www.bestbuy.com/cart")
+            # Waiting a few seconds to for the JS to execute.
+            time.sleep(5)
+            return driver.get_cookies()
+        except exceptions.TimeoutException:
+            print(f"Timeout while connecting to {self.product}")
+            return None
+        except Exception as e:
+            self.status_signal.emit(
+                {
+                    "msg": "Error Getting Cookies From Browser(line {} {} {})".format(
+                        sys.exc_info()[-1].tb_lineno, type(e).__name__, e
+                    ),
+                    "status": "error",
+                }
+            )
+            return None
+        finally:
+            if driver is not None:
+                driver.quit()
+
+    def send_slack_msg(self):
+        slack_url = "https://hooks.slack.com/"
+        data = {"text": f"From Bot: Card available at {self.product} "}
+        requests.post(slack_url, json=data)
+        return
 
     def get_tas_data(self):
         headers = {
-            "accept": "*/*",
-            "accept-encoding": "gzip, deflate, br",
-            "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "content-type": "application/json",
-            "referer": "https://www.bestbuy.com/checkout/r/payment",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         while True:
             try:
@@ -124,36 +203,29 @@ class BestBuy:
 
     def monitor(self):
         headers = {
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-            "accept-encoding": "gzip, deflate, br",
-            "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "cache-control": "max-age=0",
-            "upgrade-insecure-requests": "1",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.69 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-US,en;q=0.5",
+            # "Cache-Control": "max-age=0",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.69 Safari/537.36",
         }
         image_found = False
         product_image = ""
         while True:
             self.status_signal.emit({"msg": "Loading Product Page", "status": "normal"})
             try:
-                r = self.session.get(self.product, headers=headers)
+                r = self.session.get(self.product, headers=headers, verify=False)
                 if r.status_code == 200:
                     doc = lxml.html.fromstring(r.text)
                     if not image_found:
-                        self.sku_id = doc.xpath(
-                            '//span[@class="product-data-value body-copy"]/text()'
-                        )[1].strip()
+                        # self.sku_id = doc.xpath('//span[@class="product-data-value body-copy"]/text()')[-1].strip()
                         product_image = doc.xpath('//img[@class="primary-image"]/@src')[
                             0
                         ]
                         self.image_signal.emit(product_image)
                         image_found = True
-                    if self.check_stock():
-                        return product_image
-                    self.status_signal.emit(
-                        {"msg": "Waiting For Restock", "status": "normal"}
-                    )
-                    time.sleep(self.monitor_delay)
+                    return product_image
                 else:
                     self.status_signal.emit(
                         {"msg": "Product Not Found", "status": "normal"}
@@ -172,19 +244,21 @@ class BestBuy:
 
     def check_stock(self):
         headers = {
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-            "accept-encoding": "gzip, deflate, br",
-            "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         while True:
-            self.status_signal.emit({"msg": "Checking Stock", "status": "normal"})
             try:
                 url = "https://www.bestbuy.com/api/tcfb/model.json?paths=%5B%5B%22shop%22%2C%22scds%22%2C%22v2%22%2C%22page%22%2C%22tenants%22%2C%22bbypres%22%2C%22pages%22%2C%22globalnavigationv5sv%22%2C%22header%22%5D%2C%5B%22shop%22%2C%22buttonstate%22%2C%22v5%22%2C%22item%22%2C%22skus%22%2C{}%2C%22conditions%22%2C%22NONE%22%2C%22destinationZipCode%22%2C%22%2520%22%2C%22storeId%22%2C%22%2520%22%2C%22context%22%2C%22cyp%22%2C%22addAll%22%2C%22false%22%5D%5D&method=get".format(
                     self.sku_id
                 )
-                r = self.session.get(url, headers=headers)
-                return "ADD_TO_CART" in r.text
+                r = requests.get(url, headers=headers, verify=False)
+                if "ADD_TO_CART" in r.text:
+                    self.send_slack_msg()
+                    return "ADD_TO_CART" in r.text
+                time.sleep(self.monitor_delay)
             except Exception as e:
                 self.status_signal.emit(
                     {
@@ -198,16 +272,17 @@ class BestBuy:
 
     def atc(self):
         headers = {
-            "accept": "application/json",
-            "accept-encoding": "gzip, deflate, br",
-            "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "content-length": "31",
-            "content-type": "application/json; charset=UTF-8",
-            "origin": "https://www.bestbuy.com",
-            "referer": self.product,
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+            "Content-length": "31",
+            "Content-Type": "application/json; charset=UTF-8",
+            "Origin": "https://www.bestbuy.com",
+            "Referer": self.product,
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         body = {"items": [{"skuId": self.sku_id}]}
+        tries = 0
         while True:
             self.status_signal.emit({"msg": "Adding To Cart", "status": "normal"})
             try:
@@ -215,16 +290,20 @@ class BestBuy:
                     "https://www.bestbuy.com/cart/api/v1/addToCart",
                     json=body,
                     headers=headers,
+                    verify=False,
                 )
                 if r.status_code == 200 and json.loads(r.text)["cartCount"] == 1:
                     self.status_signal.emit(
                         {"msg": "Added To Cart", "status": "carted"}
                     )
-                    return
+                    return True
                 else:
                     self.status_signal.emit(
                         {"msg": "Error Adding To Cart", "status": "error"}
                     )
+                    if tries == 3:
+                        return False
+                    tries = tries + 1
                     time.sleep(self.error_delay)
             except Exception as e:
                 self.status_signal.emit(
@@ -237,27 +316,90 @@ class BestBuy:
                 )
                 time.sleep(self.error_delay)
 
+    def go_identity_url(self):
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
+            "Referer": "https://www.bestbuy.com/cart",
+        }
+        try:
+            r = self.session.get(self.identity_url, headers=headers, verify=False)
+        except Exception as e:
+            self.status_signal.emit(
+                {
+                    "msg": "Error Starting Cart Checkout (line {} {} {})".format(
+                        sys.exc_info()[-1].tb_lineno, type(e).__name__, e
+                    ),
+                    "status": "error",
+                }
+            )
+
+    def cart_checkout(self):
+        headers = {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Origin": "https://www.bestbuy.com",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
+            "X-ORDER-ID": self.order_id,
+        }
+        try:
+            r = self.session.post(
+                "https://www.bestbuy.com/cart/d/checkout",
+                headers=headers,
+                json=None,
+                verify=False,
+            )
+            if r.status_code == 200:
+                r = json.loads(r.text)
+                self.identity_url = r["updateData"]["redirectUrl"]
+                return
+            self.status_signal.emit(
+                {"msg": "Error Starting Cart Checkout", "status": "error"}
+            )
+            time.sleep(self.error_delay)
+        except Exception as e:
+            self.status_signal.emit(
+                {
+                    "msg": "Error Starting Cart Checkout (line {} {} {})".format(
+                        sys.exc_info()[-1].tb_lineno, type(e).__name__, e
+                    ),
+                    "status": "error",
+                }
+            )
+
     def start_checkout(self):
         headers = {
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-            "accept-encoding": "gzip, deflate, br",
-            "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "upgrade-insecure-requests": "1",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         while True:
             self.status_signal.emit({"msg": "Starting Checkout", "status": "normal"})
             try:
+                # r = self.session.get("https://www.bestbuy.com/checkout/r/fufillment",headers=headers, verify=False)
                 r = self.session.get(
-                    "https://www.bestbuy.com/checkout/r/fufillment", headers=headers
+                    "https://www.bestbuy.com/checkout/r/fast-track",
+                    headers=headers,
+                    verify=False,
                 )
                 if r.status_code == 200:
                     r = json.loads(r.text.split("var orderData = ")[1].split(";")[0])
                     self.order_id = r["id"]
                     self.item_id = r["items"][0]["id"]
+                    self.customerOrderId = r["customerOrderId"]
                     self.status_signal.emit(
                         {"msg": "Started Checkout", "status": "normal"}
                     )
+
+                    # TODO: New Part
+                    self.cart_checkout()
+                    self.go_identity_url()
                     return
                 self.status_signal.emit(
                     {"msg": "Error Starting Checkout", "status": "error"}
@@ -276,14 +418,14 @@ class BestBuy:
 
     def submit_shipping(self):
         headers = {
-            "accept": "application/com.bestbuy.order+json",
-            "accept-encoding": "gzip, deflate, br",
-            "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "content-type": "application/json",
-            "origin": "https://www.bestbuy.com",
-            "referer": "https://www.bestbuy.com/checkout/r/fulfillment",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
-            "x-user-interface": "DotCom-Optimized",
+            "Accept": "application/com.bestbuy.order+json",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+            "Content-Type": "application/json",
+            "Origin": "https://www.bestbuy.com",
+            "Referer": "https://www.bestbuy.com/checkout/r/fulfillment",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
+            "X-User-Interface": "DotCom-Optimized",
         }
         profile = self.profile
         body = {
@@ -327,10 +469,19 @@ class BestBuy:
                     "https://www.bestbuy.com/checkout/orders/{}/".format(self.order_id),
                     json=body,
                     headers=headers,
+                    verify=False,
                 )
                 if json.loads(r.text)["id"] == self.order_id:
+                    self.payment_id = json.loads(r.text)["payment"]["id"]
                     self.status_signal.emit(
                         {"msg": "Submitted Shipping", "status": "normal"}
+                    )
+                    self.session.post(
+                        "https://www.bestbuy.com/checkout/orders/{}/validate".format(
+                            self.order_id
+                        ),
+                        headers=headers,
+                        verify=False,
                     )
                     return
                 self.status_signal.emit(
@@ -350,14 +501,15 @@ class BestBuy:
 
     def submit_payment(self, tas_data):
         headers = {
-            "accept": "application/com.bestbuy.order+json",
-            "accept-encoding": "gzip, deflate, br",
-            "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "content-type": "application/json",
-            "origin": "https://www.bestbuy.com",
-            "referer": "https://www.bestbuy.com/checkout/r/fulfillment",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
-            "x-user-interface": "DotCom-Optimized",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Content-Type": "application/json",
+            "Origin": "https://www.bestbuy.com",
+            "Referer": "https://www.bestbuy.com/checkout/r/payment",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
+            "X-CLIENT": "CHECKOUT",
+            "X-CONTEXT-ID": self.customerOrderId,
         }
         profile = self.profile
         card_number = profile["card_number"]
@@ -381,19 +533,18 @@ class BestBuy:
         body = {
             "billingAddress": {
                 "country": "US",
-                "saveToProfile": False,
-                "street2": profile["billing_a2"],
                 "useAddressAsBilling": True,
                 "middleInitial": "",
                 "lastName": profile["billing_lname"],
-                "street": profile["billing_a1"],
                 "city": profile["billing_city"],
-                "override": False,
-                "zipcode": profile["billing_zipcode"],
                 "state": profile["billing_state"],
-                "dayPhoneNumber": profile["billing_phone"],
                 "firstName": profile["billing_fname"],
                 "isWishListAddress": False,
+                "addressLine1": profile["billing_a1"],
+                "addressLine2": profile["billing_a2"],
+                "dayPhone": profile["billing_phone"],
+                "postalCode": profile["billing_zipcode"],
+                "userOverridden": False,
             },
             "creditCard": {
                 "hasCID": False,
@@ -402,30 +553,32 @@ class BestBuy:
                 "isNewCard": True,
                 "isVisaCheckout": False,
                 "govPurchaseCard": False,
-                "isInternationalCard": False,
                 "number": encrypted_card,
                 "binNumber": self.bin_number,
-                "cardType": profile["card_type"].upper(),
-                "cid": profile["card_cvv"],
-                "expiration": {
-                    "month": profile["card_month"],
-                    "year": profile["card_year"],
-                },
                 "isPWPRegistered": False,
+                "expMonth": profile["card_month"],
+                "expYear": profile["card_year"],
+                "cvv": profile["card_cvv"],
+                "orderId": self.customerOrderId,
+                "saveToProfile": False,
+                "type": profile["card_type"].upper(),
+                "international": False,
+                "virtualCard": False,
             },
         }
         while True:
             self.status_signal.emit({"msg": "Submitting Payment", "status": "normal"})
             try:
-                r = self.session.patch(
-                    "https://www.bestbuy.com/checkout/orders/{}/paymentMethods".format(
-                        self.order_id
+                r = self.session.put(
+                    "https://www.bestbuy.com/payment/api/v1/payment/{}/creditCard".format(
+                        self.payment_id
                     ),
-                    json=body,
+                    data=json.dumps(body),
                     headers=headers,
+                    verify=False,
                 )
                 r = json.loads(r.text)
-                if r["id"] == self.order_id:
+                if r["paymentId"] == self.payment_id:
                     self.status_signal.emit(
                         {"msg": "Submitted Payment", "status": "normal"}
                     )
@@ -445,22 +598,62 @@ class BestBuy:
                 )
                 time.sleep(self.error_delay)
 
+    def refresh_payment(self):
+        headers = {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Content-Type": "application/json",
+            "Origin": "https://www.bestbuy.com",
+            "Referer": "https://www.bestbuy.com/checkout/r/payment",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
+            "X-Native-Checkout-Version": "__VERSION__",
+            "X-User-Interface": "DotCom-Optimized",
+        }
+        while True:
+            self.status_signal.emit({"msg": "Refreshing Payment", "status": "normal"})
+            try:
+                r = self.session.post(
+                    "https://www.bestbuy.com/checkout/orders/{}/paymentMethods/refreshPayment".format(
+                        self.order_id
+                    ),
+                    json={},
+                    headers=headers,
+                    verify=False,
+                )
+                r = json.loads(r.text)
+                if r["id"] == self.order_id:
+                    self.status_signal.emit(
+                        {"msg": "Payment Refreshed", "status": "normal"}
+                    )
+                    return
+            except Exception as e:
+                self.status_signal.emit(
+                    {
+                        "msg": "Error Submitting Order (line {} {} {})".format(
+                            sys.exc_info()[-1].tb_lineno, type(e).__name__, e
+                        ),
+                        "status": "error",
+                    }
+                )
+                time.sleep(self.error_delay)
+
     def submit_order(self):
         headers = {
-            "accept": "application/com.bestbuy.order+json",
-            "accept-encoding": "gzip, deflate, br",
-            "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "content-type": "application/json",
-            "origin": "https://www.bestbuy.com",
-            "referer": "https://www.bestbuy.com/checkout/r/payment",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
-            "x-user-interface": "DotCom-Optimized",
+            "Accept": "application/com.bestbuy.order+json",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+            "Content-Type": "application/json",
+            "Origin": "https://www.bestbuy.com",
+            "Referer": "https://www.bestbuy.com/checkout/r/payment",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
+            "X-User-Interface": "DotCom-Optimized",
         }
         body = {
             "browserInfo": {
                 "javaEnabled": False,
                 "language": "en-US",
-                "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+                "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
                 "height": "1057",
                 "width": "1057",
                 "timeZone": "240",
@@ -474,6 +667,7 @@ class BestBuy:
                     "https://www.bestbuy.com/checkout/orders/{}/".format(self.order_id),
                     json=body,
                     headers=headers,
+                    verify=False,
                 )
                 r = json.loads(r.text)
                 try:
@@ -482,6 +676,12 @@ class BestBuy:
                         self.status_signal.emit(
                             {
                                 "msg": "3DSecure Found, Starting Auth Process",
+                                "status": "error",
+                            }
+                        )
+                        self.status_signal.emit(
+                            {
+                                "msg": f"Payment error {r['errorCode']}",
                                 "status": "error",
                             }
                         )
@@ -494,7 +694,6 @@ class BestBuy:
                         return True, None
                 self.status_signal.emit({"msg": "Payment Failed", "status": "error"})
                 return False, None
-
             except Exception as e:
                 self.status_signal.emit(
                     {
@@ -508,15 +707,15 @@ class BestBuy:
 
     def handle_3dsecure(self, jwt):
         headers = {
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-            "accept-encoding": "gzip, deflate, br",
-            "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-            "cache-control": "max-age=0",
-            "content-type": "application/x-www-form-urlencoded",
-            "origin": "https://www.bestbuy.com",
-            "referer": "https://www.bestbuy.com/",
-            "upgrade-insecure-requests": "1",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+            "Cache-Control": "max-age=0",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "https://www.bestbuy.com",
+            "Referer": "https://www.bestbuy.com/",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         body = {"JWT": jwt, "TermUrl": "/payment/r/threeDSecure/redirect", "MD": ""}
         while True:
@@ -526,6 +725,7 @@ class BestBuy:
                     "https://centinelapi.cardinalcommerce.com/V2/Cruise/StepUp",
                     data=body,
                     headers=headers,
+                    verify=False,
                 )
                 doc = lxml.html.fromstring(r.text)
                 pa_req = doc.xpath('//input[@id="payload"]/@value')[0]
@@ -554,13 +754,13 @@ class BestBuy:
             "Origin": "https://centinelapi.cardinalcommerce.com",
             "Referer": "https://centinelapi.cardinalcommerce.com/",
             "Upgrade-Insecure-Requests": "1",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         body = {"PaReq": pa_req, "MD": md, "TermUrl": term_url}
         while True:
             self.status_signal.emit({"msg": "Authorizing Card (2)", "status": "normal"})
             try:
-                r = self.session.post(acs_url, data=body, headers=headers)
+                r = self.session.post(acs_url, data=body, headers=headers, verify=False)
                 doc = lxml.html.fromstring(r.text)
                 pa_req = doc.xpath('//input[@name="PaReq"]/@value')[0]
                 term_url = doc.xpath('//input[@name="TermUrl"]/@value')[0]
@@ -588,13 +788,13 @@ class BestBuy:
             "Origin": "https://1eaf.cardinalcommerce.com",
             "Referer": "https://1eaf.cardinalcommerce.com/",
             "Upgrade-Insecure-Requests": "1",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         body = {"PaReq": pa_req, "TermUrl": term_url, "MD": md}
         while True:
             self.status_signal.emit({"msg": "Authorizing Card (3)", "status": "normal"})
             try:
-                r = self.session.post(url, data=body, headers=headers)
+                r = self.session.post(url, data=body, headers=headers, verify=False)
                 doc = lxml.html.fromstring(r.text)
                 pa_res = doc.xpath('//input[@name="PaRes"]/@value')[0]
                 pa_req = doc.xpath('//input[@name="PaReq"]/@value')[0]
@@ -638,7 +838,7 @@ class BestBuy:
             "Origin": "https://secure4.arcot.com",
             "Referer": "https://secure4.arcot.com/",
             "Upgrade-Insecure-Requests": "1",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         body = {
             "PaRes": pa_res,
@@ -658,7 +858,7 @@ class BestBuy:
         while True:
             self.status_signal.emit({"msg": "Authorizing Card (4)", "status": "normal"})
             try:
-                r = self.session.post(url, data=body, headers=headers)
+                r = self.session.post(url, data=body, headers=headers, verify=False)
                 doc = lxml.html.fromstring(r.text)
                 pa_res = doc.xpath('//input[@name="PaRes"]/@value')[0]
                 md = doc.xpath('//input[@name="MD"]/@value')[0]
@@ -683,13 +883,13 @@ class BestBuy:
             "origin": "https://1eaf.cardinalcommerce.com",
             "referer": "https://1eaf.cardinalcommerce.com/",
             "upgrade-insecure-requests": "1",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         body = {"PaRes": pa_res, "MD": md}
         while True:
             self.status_signal.emit({"msg": "Authorizing Card (5)", "status": "normal"})
             try:
-                r = self.session.post(url, data=body, headers=headers)
+                r = self.session.post(url, data=body, headers=headers, verify=False)
                 jwt = r.text.split('parent.postMessage("')[1].split('"')[0]
                 break
             except Exception as e:
@@ -711,7 +911,7 @@ class BestBuy:
             "origin": "https://centinelapi.cardinalcommerce.com",
             "referer": "https://centinelapi.cardinalcommerce.com/V2/Cruise/StepUp",
             "upgrade-insecure-requests": "1",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         body = {"McsId": md, "CardinalJWT": jwt, "Error": ""}
         while True:
@@ -721,6 +921,7 @@ class BestBuy:
                     "https://centinelapi.cardinalcommerce.com/V1/Cruise/TermRedirection",
                     data=body,
                     headers=headers,
+                    verify=False,
                 )
                 doc = lxml.html.fromstring(r.text)
                 transaction_id = doc.xpath('//input[@name="TransactionId"]/@value')[0]
@@ -745,7 +946,7 @@ class BestBuy:
             "content-type": "application/json",
             "origin": "https://www.bestbuy.com",
             "referer": "https://www.bestbuy.com/checkout/r/payment",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.92 Safari/537.36",
+            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
             "x-user-interface": "DotCom-Optimized",
             "x-native-checkout-version": "__VERSION__",
         }
@@ -757,6 +958,7 @@ class BestBuy:
                     "https://www.bestbuy.com/checkout/api/1.0/paysecure/submitCardAuthentication",
                     json=body,
                     headers=headers,
+                    verify=False,
                 )
                 if r.status_code == 200:
                     return
