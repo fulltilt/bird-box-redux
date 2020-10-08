@@ -246,7 +246,7 @@ class HomePage(QtWidgets.QWidget):
             "color: #FFFFFF;background-color: #5D43FB;border: none;"
         )
         self.startall_btn.setText("Start All")
-        # self.startall_btn.clicked.connect(self.start_all_tasks)
+        self.startall_btn.clicked.connect(self.start_all_tasks)
         self.stopall_btn = QtWidgets.QPushButton(self.buttons_card)
         self.stopall_btn.setGeometry(QtCore.QRect(197, 10, 81, 32))
         self.stopall_btn.setFont(font)
@@ -255,7 +255,7 @@ class HomePage(QtWidgets.QWidget):
             "color: #FFFFFF;background-color: #5D43FB;border: none;"
         )
         self.stopall_btn.setText("Stop All")
-        # self.stopall_btn.clicked.connect(self.stop_all_tasks)
+        self.stopall_btn.clicked.connect(self.stop_all_tasks)
         self.deleteall_btn = QtWidgets.QPushButton(self.buttons_card)
         self.deleteall_btn.setGeometry(QtCore.QRect(285, 10, 86, 32))
         self.deleteall_btn.setFont(font)
@@ -264,11 +264,11 @@ class HomePage(QtWidgets.QWidget):
             "color: #FFFFFF;background-color: #5D43FB;border: none;"
         )
         self.deleteall_btn.setText("Delete All")
-        # self.deleteall_btn.clicked.connect(self.delete_all_tasks)
+        self.deleteall_btn.clicked.connect(self.delete_all_tasks)
 
         QtCore.QMetaObject.connectSlotsByName(homepage)
 
-    # loads each task to the table
+    # loads each task to the table (each task will be one row in the table)
     def load_tasks(self):
         tasks_data = return_data("./data/tasks.json")
         write_data("./data/tasks.json", [])
@@ -283,7 +283,7 @@ class HomePage(QtWidgets.QWidget):
                     task["error_delay"],
                     task["max_price"],
                     self.stop_all_tasks,
-                    self.scrollAreaWidgetContents,
+                    self.scrollAreaWidgetContents,  # parent
                 )
                 self.verticalLayout.takeAt(self.verticalLayout.count() - 1)
                 self.verticalLayout.addWidget(tab)
