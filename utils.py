@@ -109,7 +109,7 @@ def format_proxy(proxy):
         return {"http": "http://" + proxy, "https": "https://" + proxy}
 
 
-def send_webhook(webhook_type, site, profile, task_id, image_url):
+def send_webhook(webhook_type, site, profile, task_id, image_url): 
     if settings.webhook != "":
         webhook = DiscordWebhook(
             url=settings.webhook,
@@ -120,6 +120,10 @@ def send_webhook(webhook_type, site, profile, task_id, image_url):
             if not settings.webhook_on_order:
                 return
             embed = DiscordEmbed(title="Order Placed", color=0x34C693)
+        if webhook_type == "AD":
+            if not settings.webhook_on_order:
+                return
+            embed = DiscordEmbed(title="Added To Cart", color=0x34C693)
         elif webhook_type == "B":
             if not settings.webhook_on_browser:
                 return
@@ -143,6 +147,31 @@ def send_webhook(webhook_type, site, profile, task_id, image_url):
         except:
             pass
 
+def send_webhook2(webhook_type, site, profile, url):    
+    if settings.webhook != "":
+        webhook = DiscordWebhook(
+            url=settings.webhook,
+            username="Bird Bot",
+            avatar_url="https://i.imgur.com/fy26LbM.png",
+        )
+
+        if webhook_type == "AD":
+            if not settings.webhook_on_order:
+                return
+            embed = DiscordEmbed(title="Added To Cart", color=0x34C693)
+
+        embed.set_footer(
+            text="Via Bird Bot", icon_url="https://i.imgur.com/fy26LbM.png"
+        )
+        embed.add_embed_field(name="Site", value=site, inline=True)
+        embed.add_embed_field(name="Profile", value=profile, inline=True)
+        embed.add_embed_field(name="URL", value=url, inline=True)
+        # embed.set_thumbnail(url=image_url)
+        webhook.add_embed(embed)
+        try:
+            webhook.execute()
+        except:
+            pass
 
 def open_browser(link, cookies):
     threading.Thread(target=start_browser, args=(link, cookies)).start()

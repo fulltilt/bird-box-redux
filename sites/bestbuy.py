@@ -5,7 +5,7 @@ except:
     from Cryptodome.PublicKey import RSA
     from Cryptodome.Cipher import PKCS1_OAEP
 from base64 import b64encode
-from utils import send_webhook
+from utils import send_webhook, send_webhook2
 import requests, time, lxml.html, json, sys, settings
 
 import urllib3
@@ -49,12 +49,17 @@ class BestBuy:
             self.session.proxies.update(proxy)
         self.status_signal.emit({"msg": "Starting", "status": "normal"})
 
+        # Get cookies using the browser (NOTE: moving here as this takes awhile and is not something you want to wait for when checking out)
+        self.set_cookies_using_browser()
+
         while True:
             self.status_signal.emit({"msg": "Checking Stock", "status": "normal"})
             self.check_stock()
             tas_data = self.get_tas_data()
-            # Get cookies using the browser
-            self.set_cookies_using_browser()
+
+            # # Get cookies using the browser
+            # self.set_cookies_using_browser()
+            
             product_image = self.monitor()
             if not self.atc():
                 continue
@@ -128,12 +133,13 @@ class BestBuy:
                 r = requests.get(url, headers=headers, verify=False)    # verify=False says Requests can ignore verifying the SSL certificate
                 if "ADD_TO_CART" in r.text:
                     # self.send_slack_msg() # this was in here originally but removing as we're not sending Slack messages
-                    send_webhook(
-                            "OP",
-                            "Bestbuy",
+                    send_webhook2(
+                            "AD",
+                            "BestBuy",
                             self.profile["profile_name"],
-                            task_id,
-                            product_image,
+                            self.product
+                            # task_id,
+                            # product_image,
                         )
                     return "ADD_TO_CART" in r.text
                 time.sleep(self.monitor_delay)
@@ -147,7 +153,7 @@ class BestBuy:
                     }
                 )
                 time.sleep(self.error_delay)
-                
+
     def set_cookies_using_browser(self):
         self.status_signal.emit(
             {"msg": "Getting Cookies from Selenium", "status": "normal"}

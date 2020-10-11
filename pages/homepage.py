@@ -1,6 +1,7 @@
 from PyQt5 import QtCore, QtGui, QtWidgets
 from sites.walmart import Walmart
 from sites.bestbuy import BestBuy
+from sites.target import Target
 from pages.createdialog import CreateDialog
 from utils import (
     get_profile,
@@ -696,6 +697,17 @@ class TaskThread(QtCore.QThread):
             )
         elif self.site == "Bestbuy":
             BestBuy(
+                self.task_id,
+                self.status_signal,
+                self.image_signal,
+                self.product,
+                profile,
+                proxy,
+                self.monitor_delay,
+                self.error_delay,
+            )
+        elif self.site == "Target":
+            Target(
                 self.task_id,
                 self.status_signal,
                 self.image_signal,

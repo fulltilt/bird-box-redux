@@ -41,6 +41,7 @@ class CreateDialog(QtWidgets.QDialog):
         self.site_box.setFont(font)
         self.site_box.addItem("Bestbuy")
         self.site_box.addItem("Walmart")
+        self.site_box.addItem("Target")
         self.input_edit = QtWidgets.QLineEdit(self.background)
         self.input_edit.setGeometry(QtCore.QRect(250, 20, 151, 21))
         self.input_edit.setFocusPolicy(QtCore.Qt.ClickFocus)

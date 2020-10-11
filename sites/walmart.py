@@ -39,7 +39,10 @@ class Walmart:
         if proxy != False:
             self.session.proxies.update(proxy)
         self.status_signal.emit({"msg": "Starting", "status": "normal"})
+
+        # using the product url, get the product image, check max price and return offer_id
         self.product_image, offer_id = self.monitor()
+
         self.atc(offer_id)
         item_id, fulfillment_option, ship_method = self.check_cart_items()
         self.submit_shipping_method(item_id, fulfillment_option, ship_method)
@@ -49,6 +52,7 @@ class Walmart:
         self.submit_billing(pi_hash)
         self.submit_order()
 
+    # using the product url, get the product image, check max price and return offer_id
     def monitor(self):
         headers = {
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
@@ -73,7 +77,7 @@ class Walmart:
                         self.image_signal.emit(product_image)
                         image_found = True
                     price = float(doc.xpath('//span[@itemprop="price"]/@content')[0])
-                    if "Add to Cart" in r.text:
+                    if "Add to Cart".upper() in r.text.upper():
                         if self.max_price != "":
                             if float(self.max_price) < price:
                                 self.status_signal.emit(
@@ -129,6 +133,7 @@ class Walmart:
                     json=body,
                     headers=headers,
                 )
+                print(r.text)
                 if r.status_code == 201 and json.loads(r.text)["checkoutable"] == True:
                     self.status_signal.emit(
                         {"msg": "Added To Cart", "status": "carted"}

@@ -16,7 +16,7 @@ from selenium.webdriver.firefox.options import Options
 from selenium.common import exceptions
 
 
-class BestBuy:
+class Target:
     def __init__(
         self,
         task_id,
@@ -61,8 +61,21 @@ class BestBuy:
         image_found = False
         sproduct_image = ""
         try:
+            self.status_signal.emit({"msg": "Loading Product Page", "status": "normal"})
             r = self.session.get(self.product, headers=headers)
-            print(r)
+            if r.status_code == 200:
+                doc = lxml.html.fromstring(r.text)
+                print(r.text)
+                if not image_found:
+                    product_image = doc.xpath(
+                        "//img"
+                    )[0]
+                    # self.image_signal.emit(product_image)
+                    image_found = True
+                # price = float(doc.xpath('//divn[@data-test="product-price"]/@content'))
+
+                print(doc.xpath('//div[@data-test="product-price"]/@content'))
+
         except Exception as e:
             self.status_signal.emit(
                 {
