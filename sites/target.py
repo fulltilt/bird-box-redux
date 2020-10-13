@@ -5,7 +5,7 @@ except:
     from Cryptodome.PublicKey import RSA
     from Cryptodome.Cipher import PKCS1_OAEP
 from base64 import b64encode
-from utils import send_webhook
+from utils import send_webhook, send_webhook2
 import requests, time, lxml.html, json, sys, settings
 
 import urllib3
@@ -14,6 +14,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.common import exceptions
+from selenium.webdriver.common.by import By
 
 
 class Target:
@@ -47,8 +48,32 @@ class Target:
         if proxy != False:
             self.session.proxies.update(proxy)
         self.status_signal.emit({"msg": "Starting", "status": "normal"})
+
+        driver = webdriver.Firefox()
+        driver.get("http://www.target.com")
+        driver.implicitly_wait(3)
+
+        login_icon = driver.find_element_by_id("account")
+        login_icon.click()
+        signin_link = driver.find_element_by_link_text('Sign in')
+        signin_link.click()
+        username_input = driver.find_element_by_id("username")
+        username_input.send_keys('')
+        password_input = driver.find_element_by_id("password")
+        password_input.send_keys('')
+        # signedin_checkbox = driver.find_element_by_link_text('Keep me signed in')
+        signedin_checkbox = driver.find_element(By.XPATH, "//*[text()='Keep me signed in']")
+        signedin_checkbox.click()
+        # login_button = login_icon = driver.find_element_by_id("login")
+        # login_button.click()
+
         # self.product_image, offer_id = self.monitor()
-        self.monitor()
+        # self.monitor()
+
+        # driver.close()
+
+    def login(self):
+        pass
 
     def monitor(self):
         headers = {

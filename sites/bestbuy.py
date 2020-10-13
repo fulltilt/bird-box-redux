@@ -14,7 +14,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.common import exceptions
-
+import threading
 
 class BestBuy:
     def __init__(
@@ -45,20 +45,28 @@ class BestBuy:
         )
         self.sku_id = self.product.split("=")[1]    # not in walmart.py
         self.session = requests.Session()
+        self.cookies_from_browser = self.get_cookies_using_browser()
+
+        self.kill_cookie_thread = False
+        cookie_thread = threading.Thread(
+            target=self.launch_cookie_thread,
+            args=(),
+        )
+        cookie_thread.name = "cookieThread"
+        cookie_thread.daemon = True
+        cookie_thread.start()
+
         if proxy != False:
             self.session.proxies.update(proxy)
         self.status_signal.emit({"msg": "Starting", "status": "normal"})
-
-        # Get cookies using the browser (NOTE: moving here as this takes awhile and is not something you want to wait for when checking out)
-        self.set_cookies_using_browser()
 
         while True:
             self.status_signal.emit({"msg": "Checking Stock", "status": "normal"})
             self.check_stock()
             tas_data = self.get_tas_data()
 
-            # # Get cookies using the browser
-            # self.set_cookies_using_browser()
+            # Get cookies using the browser
+            self.set_cookies_using_browser()
             
             product_image = self.monitor()
             if not self.atc():
@@ -118,6 +126,18 @@ class BestBuy:
             if success:
                 break
 
+        self.kill_cookie_thread = True
+        cookie_thread.join()
+
+    def launch_cookie_thread(self):
+        while(not self.kill_cookie_thread):
+            self.status_signal.emit(
+                {"msg": "Getting Cookies Using Browser", "status": "normal"})
+            self.cookies_from_browser = self.get_cookies_using_browser()
+            self.status_signal.emit(
+                {"msg": "Got Cookies Using Browser", "status": "normal"})
+            time.sleep(600)
+
     def check_stock(self):
         headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
@@ -126,6 +146,7 @@ class BestBuy:
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.42 Safari/537.36",
         }
         while True:
+            self.status_signal.emit({"msg":"Checking Stock","status":"normal"})
             try:
                 url = "https://www.bestbuy.com/api/tcfb/model.json?paths=%5B%5B%22shop%22%2C%22scds%22%2C%22v2%22%2C%22page%22%2C%22tenants%22%2C%22bbypres%22%2C%22pages%22%2C%22globalnavigationv5sv%22%2C%22header%22%5D%2C%5B%22shop%22%2C%22buttonstate%22%2C%22v5%22%2C%22item%22%2C%22skus%22%2C{}%2C%22conditions%22%2C%22NONE%22%2C%22destinationZipCode%22%2C%22%2520%22%2C%22storeId%22%2C%22%2520%22%2C%22context%22%2C%22cyp%22%2C%22addAll%22%2C%22false%22%5D%5D&method=get".format(
                     self.sku_id
@@ -158,7 +179,9 @@ class BestBuy:
         self.status_signal.emit(
             {"msg": "Getting Cookies from Selenium", "status": "normal"}
         )
-        cookies = self.get_cookies_using_browser()
+        # cookies = self.get_cookies_using_browser()
+        # cookies = self.cookies_from_browser
+        cookies = self.cookies_from_browser
         if cookies is not None:
             for cookie in cookies:
                 self.session.cookies.set(
