@@ -1,5 +1,5 @@
 from sites.walmart_encryption import walmart_encryption as w_e
-from utils import send_webhook
+from utils import send_webhook, send_webhook2
 import urllib, requests, time, lxml.html, json, sys, settings
 
 
@@ -44,6 +44,7 @@ class Walmart:
         self.product_image, offer_id = self.monitor()
 
         self.atc(offer_id)
+        return
         item_id, fulfillment_option, ship_method = self.check_cart_items()
         self.submit_shipping_method(item_id, fulfillment_option, ship_method)
         self.submit_shipping_address()
@@ -138,6 +139,14 @@ class Walmart:
                     self.status_signal.emit(
                         {"msg": "Added To Cart", "status": "carted"}
                     )
+                    send_webhook2(
+                            "AD",
+                            "BestBuy",
+                            self.profile["profile_name"],
+                            self.product
+                            # task_id,
+                            # product_image,
+                        )
                     return
                 else:
                     self.status_signal.emit(

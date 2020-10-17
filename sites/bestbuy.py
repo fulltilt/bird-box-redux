@@ -45,8 +45,8 @@ class BestBuy:
         )
         self.sku_id = self.product.split("=")[1]    # not in walmart.py
         self.session = requests.Session()
-        self.cookies_from_browser = self.get_cookies_using_browser()
 
+        self.cookies_from_browser = self.get_cookies_using_browser()
         self.kill_cookie_thread = False
         cookie_thread = threading.Thread(
             target=self.launch_cookie_thread,
@@ -61,7 +61,7 @@ class BestBuy:
         self.status_signal.emit({"msg": "Starting", "status": "normal"})
 
         while True:
-            self.status_signal.emit({"msg": "Checking Stock", "status": "normal"})
+            # self.status_signal.emit({"msg": "Checking Stock", "status": "normal"})
             self.check_stock()
             tas_data = self.get_tas_data()
 
@@ -176,9 +176,6 @@ class BestBuy:
                 time.sleep(self.error_delay)
 
     def set_cookies_using_browser(self):
-        self.status_signal.emit(
-            {"msg": "Getting Cookies from Selenium", "status": "normal"}
-        )
         # cookies = self.get_cookies_using_browser()
         # cookies = self.cookies_from_browser
         cookies = self.cookies_from_browser
